@@ -41,8 +41,10 @@ GNOME manual-fallback keybinding — see below).
 |---|---|---|
 | `99-usb-switch.rules` | `/etc/udev/rules.d/99-usb-switch.rules` | Matches the KVM hub's `add`/`remove` USB hotplug events and runs `monitor-switch.sh`. |
 | `monitor-switch.sh` | `/usr/local/bin/monitor-switch.sh` | Switches the BenQ's DDC input via `ddcutil`, then (on `add` only) waits for `DP-5` to register and delegates to `revive-samsung.sh`. Runs as root, non-interactively, from udev. |
-| `revive-samsung.sh` | `/usr/local/bin/revive-samsung.sh` | The actual `gdctl` disable/re-add dance that revives the Samsung once `DP-5` is registered with mutter but blank. Runs as your normal user. Callable directly (e.g. after pressing the Samsung's power button or an AC power-cycle, without a KVM switch) as well as from `monitor-switch.sh`. |
-| `install.sh` | — (run directly) | Installs all three scripts/rules above with correct ownership/permissions and reloads udev. Idempotent — safe to re-run. |
+| `revive-samsung.sh` | `/usr/local/bin/revive-samsung.sh` | The actual `gdctl` disable/re-add dance that revives the Samsung once `DP-5` is registered with mutter but blank. Runs as your normal user. Callable directly (e.g. after pressing the Samsung's power button or an AC power-cycle, without a KVM switch) as well as from `monitor-switch.sh` and `watch-samsung.sh`. |
+| `watch-samsung.sh` | `/usr/local/bin/watch-samsung.sh` | Watches mutter's `MonitorsChanged` D-Bus signal and auto-runs `revive-samsung.sh` when `DP-5` transitions from absent to present - so the button/power-cycle is the only manual step left. Runs as your normal user via `watch-samsung.service`. |
+| `watch-samsung.service` | `/etc/systemd/user/watch-samsung.service` | systemd `--user` unit that keeps `watch-samsung.sh` running across logins/crashes. |
+| `install.sh` | — (run directly) | Installs everything above with correct ownership/permissions, reloads udev, and enables+starts `watch-samsung.service`. Idempotent — safe to re-run. |
 
 ## Key findings (most-recent first)
 
@@ -191,10 +193,24 @@ loop end-to-end.
   for low-voltage DC work) wired inline with the Samsung's power cord.
 
 **Decision (2026-09-13): holding off on buying any hardware for now.**
-Using the manual workflow instead: press the Samsung's power button (or
-power-cycle it, off ≥90s) to get `DP-5` re-registered, then run
-`revive-samsung.sh` yourself. Revisit the smart-plug options above if this
-manual step becomes annoying enough to justify the hardware/DIY effort.
+Instead, `watch-samsung.sh` (see below) auto-detects `DP-5` reappearing and
+runs `revive-samsung.sh` automatically — so the only manual step left is
+the physical one: press the Samsung's power button, or power-cycle it
+(off ≥90s). Revisit the smart-plug options above only if that remaining
+physical step becomes annoying enough to justify the hardware/DIY effort.
+
+**Auto-detecting the reappear event (2026-09-13):** mutter exposes a
+`MonitorsChanged()` D-Bus signal on `org.gnome.Mutter.DisplayConfig`
+whenever the monitor topology changes, including this. `watch-samsung.sh`
+listens for it via `gdbus monitor`, tracks whether `DP-5` was present on
+the last check, and calls `revive-samsung.sh` only on an absent→present
+transition. Confirmed by testing that `revive-samsung.sh`'s own `gdctl set`
+calls don't cause a feedback loop: `DP-5` stays listed under `gdctl show`'s
+top-level `Monitors:` section throughout the disable/re-add dance (only
+the `Logical monitors:` section changes), so the watcher never sees a
+false absent→present transition from its own actions. Runs as a
+`systemd --user` service (`watch-samsung.service`) rather than from udev,
+since it only needs the normal desktop session's D-Bus access.
 
 ### Blank-screen regression after migrating 22.04 → 26.04
 
@@ -238,7 +254,11 @@ dconf dump /org/gnome/settings-daemon/ > keybinding-backup.dconf
 
 ## Troubleshooting checklist
 
-- Log: `/tmp/usb_switch.log` (written by `monitor-switch.sh`).
+- Logs: `/tmp/usb_switch.log` (`monitor-switch.sh`/`revive-samsung.sh` when
+  called from a KVM switch), `/tmp/watch_samsung.log` (`watch-samsung.sh`).
+- `systemctl --user status watch-samsung.service` — confirms the watcher is
+  actually running; `journalctl --user -u watch-samsung.service` for its
+  own stderr/crash output (separate from `/tmp/watch_samsung.log`).
 - `ddcutil detect` — confirms which `/dev/i2c-*` bus the BenQ answers on.
 - `gdctl show -v` — confirms connector names, current modes, and logical
   monitor layout/positions as mutter sees them.
