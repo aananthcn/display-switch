@@ -40,8 +40,9 @@ GNOME manual-fallback keybinding — see below).
 | File | Installed to | Purpose |
 |---|---|---|
 | `99-usb-switch.rules` | `/etc/udev/rules.d/99-usb-switch.rules` | Matches the KVM hub's `add`/`remove` USB hotplug events and runs `monitor-switch.sh`. |
-| `monitor-switch.sh` | `/usr/local/bin/monitor-switch.sh` | Switches the BenQ's DDC input via `ddcutil`, then (on `add` only) revives the Samsung via `gdctl`. Runs as root, non-interactively, from udev. |
-| `install.sh` | — (run directly) | Installs both files above with correct ownership/permissions and reloads udev. Idempotent — safe to re-run. |
+| `monitor-switch.sh` | `/usr/local/bin/monitor-switch.sh` | Switches the BenQ's DDC input via `ddcutil`, then (on `add` only) waits for `DP-5` to register and delegates to `revive-samsung.sh`. Runs as root, non-interactively, from udev. |
+| `revive-samsung.sh` | `/usr/local/bin/revive-samsung.sh` | The actual `gdctl` disable/re-add dance that revives the Samsung once `DP-5` is registered with mutter but blank. Runs as your normal user. Callable directly (e.g. after pressing the Samsung's power button or an AC power-cycle, without a KVM switch) as well as from `monitor-switch.sh`. |
+| `install.sh` | — (run directly) | Installs all three scripts/rules above with correct ownership/permissions and reloads udev. Idempotent — safe to re-run. |
 
 ## Key findings (most-recent first)
 
@@ -150,27 +151,50 @@ that lets a script re-inject "here's the sideband message you missed" or
 otherwise force the driver to re-link an already-dropped MST branch.
 Confirmed a 2-minute wait doesn't let it self-heal either.
 
-**Options considered, none implemented yet:**
-1. **Check for a newer NVIDIA driver.** Currently on 595.91.07. NVIDIA does
-   periodically fix MST bugs; worth checking release notes / trying a
-   driver update before assuming this needs a workaround at all.
-2. **Smart plug to power-cycle the Samsung.** Cut and restore mains power
-   to the Samsung via a WiFi/Zigbee smart plug (prefer a local-API one like
-   Shelly/Tasmota over a cloud-only one) when `DP-5` doesn't register in
-   time. A real electrical power-cycle is very likely to force the same
-   fresh HPD the physical button does, since it re-initializes the
-   monitor's HDMI receiver hardware from scratch. Needs ~$10-20 of hardware
-   plus scripting its API into `monitor-switch.sh`. Most likely to actually
-   work end-to-end; not yet built.
-3. **Force a DRM connector reprobe via debugfs**
-   (`/sys/kernel/debug/dri/.../force`, root-only) to see if that makes the
-   NVIDIA driver rediscover the dropped branch without new hardware.
-   Untested — uncertain whether NVIDIA's proprietary driver honors `force`
-   for a dynamically-managed MST sub-connector the way it does for a real
-   physical port.
-4. **Accept it as semi-automatic.** Current state: the script auto-fixes
-   case 1, clearly logs case 2 when it happens, and a manual power-button
-   press remains the only known fix for case 2.
+**Checked for a newer NVIDIA driver fix (2026-09-13):** currently on the
+`595.91.07` stable branch; `610.57.04` (new feature branch) is available
+via apt (`nvidia-driver-610-open`). Checked its official changelog and
+press coverage — no mention of any DisplayPort/MST/hotplug/monitor-detection
+fix in that release. The only nearby MST-related fix found was a *kernel
+crash on MST dock disconnect*, already included in the 595 series we're on
+— a different bug from ours. No evidence a driver update fixes this;
+not installed (would also cost a reboot for a speculative fix).
+
+**Confirmed AC power-cycling reproduces the same recovery as the physical
+button** (2026-09-13): cutting mains power to the Samsung (it's on its own
+separate plug) and restoring it gets `DP-5` re-registered with mutter, same
+as pressing the power button — but only if it's left off long enough. Its
+internal DC regulator's capacitance keeps it effectively "powered" for
+close to a minute after mains is cut; power-cycling faster than that is "as
+good as no power cycling" (branch stays dropped). **Off for at least ~90s**
+before restoring power is the confirmed-working interval. After that, it
+comes back registered-but-blank, and `revive-samsung.sh` fixes it from
+there — so a smart plug automating this power-cycle really would close the
+loop end-to-end.
+
+**Hardware options considered for automating the power-cycle
+(2026-09-13):**
+- **Shelly / Tasmota-branded plugs** — the obvious local-API choice, but
+  not affordably available in India (Shelly: available but too costly for
+  this; other Tasmota-branded plugs: not found on Amazon.in).
+- **Sonoff plugs** — mostly Amazon.com/UK listings found; not confirmed
+  reliably available on Amazon.in without import cost.
+- **Commodity Tuya/SmartLife WiFi plugs** (Wipro, Syska, Goldmedal, generic
+  "16A WiFi Smart Plug" listings) — cheap and everywhere on Amazon.in, but
+  ship cloud-only; local-only control needs a `tuya-convert`-style Tasmota
+  flash, which newer firmware often blocks. A gamble per specific
+  unit/batch, not a sure thing.
+- **DIY ESP8266 WiFi relay module** (e.g. from Robu.in, an Indian
+  electronics retailer) — ships blank, flash genuine Tasmota yourself over
+  USB, so local-only control is guaranteed rather than gambled on. Needs a
+  **mains-AC-rated** relay module (not a bare 5V logic-level relay meant
+  for low-voltage DC work) wired inline with the Samsung's power cord.
+
+**Decision (2026-09-13): holding off on buying any hardware for now.**
+Using the manual workflow instead: press the Samsung's power button (or
+power-cycle it, off ≥90s) to get `DP-5` re-registered, then run
+`revive-samsung.sh` yourself. Revisit the smart-plug options above if this
+manual step becomes annoying enough to justify the hardware/DIY effort.
 
 ### Blank-screen regression after migrating 22.04 → 26.04
 

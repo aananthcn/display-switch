@@ -26,11 +26,12 @@ BUS=1
 # testing `env -i` with only these two vars set.
 GNOME_USER=aananth
 GNOME_UID=1000
-gdctl_as_user() {
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+run_as_user() {
   /usr/sbin/runuser -u "$GNOME_USER" -- env \
     XDG_RUNTIME_DIR="/run/user/$GNOME_UID" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$GNOME_UID/bus" \
-    /usr/bin/gdctl "$@"
+    "$@"
 }
 
 # The BenQ's own DisplayPort link briefly drops and retrains when its OSD
@@ -49,7 +50,7 @@ gdctl_as_user() {
 wait_for_monitor() {
   local name="$1" tries="$2"
   for _ in $(seq 1 "$tries"); do
-    gdctl_as_user show 2>/dev/null | grep -q "Monitor $name" && return 0
+    run_as_user /usr/bin/gdctl show 2>/dev/null | grep -q "Monitor $name" && return 0
     sleep 0.5
   done
   return 1
@@ -69,20 +70,13 @@ echo "$(date) UGREEN $ACTION detected, switching BenQ (bus $BUS) to $INPUT" >> "
 
 if [ "$ACTION" = "add" ]; then
   # The Samsung (DP-5, MST off the BenQ's DP-out through an active DP->HDMI
-  # converter) frequently stays powered off after this switch. Positions
-  # below match the current GNOME layout (DP-2 primary at 2560,0 next to
-  # DP-5 at 0,0) - update these if the desktop layout is ever rearranged.
+  # converter) frequently stays powered off after this switch. The actual
+  # gdctl disable/re-add dance lives in revive-samsung.sh, shared with
+  # manual invocation - see that file for the position/layout details.
   if wait_for_monitor DP-2 10; then
     if wait_for_monitor DP-5 20; then
-      echo "$(date) DP-5 registered with mutter, reviving via gdctl" >> "$LOG"
-      gdctl_as_user show >> "$LOG" 2>&1
-      # Solo DP-2 must sit at (0,0) - mutter rejects a logical-monitor layout
-      # whose origin isn't (0,0) ("Logical monitors positions are offset").
-      gdctl_as_user set --logical-monitor --monitor DP-2 --primary --x 0 --y 0 >> "$LOG" 2>&1
-      sleep 1
-      gdctl_as_user set --logical-monitor --monitor DP-2 --primary --x 2560 --y 0 \
-                         --logical-monitor --monitor DP-5 --x 0 --y 0 >> "$LOG" 2>&1
-      gdctl_as_user show >> "$LOG" 2>&1
+      echo "$(date) DP-5 registered with mutter, reviving via revive-samsung.sh" >> "$LOG"
+      run_as_user "$SCRIPT_DIR/revive-samsung.sh" >> "$LOG" 2>&1
     else
       echo "$(date) DP-5 never registered with mutter (MST branch fully dropped) - Samsung will likely need a manual power-button press this time" >> "$LOG"
     fi

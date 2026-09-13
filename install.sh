@@ -27,6 +27,9 @@ echo "Installing monitor-switch.sh -> /usr/local/bin/monitor-switch.sh"
 install -o root -g root -m 755 "$SCRIPT_DIR/monitor-switch.sh" /usr/local/bin/monitor-switch.sh
 rm -f /usr/local/bin/switch2win.sh  # old name from before the rename
 
+echo "Installing revive-samsung.sh -> /usr/local/bin/revive-samsung.sh"
+install -o root -g root -m 755 "$SCRIPT_DIR/revive-samsung.sh" /usr/local/bin/revive-samsung.sh
+
 echo "Installing 99-usb-switch.rules -> /etc/udev/rules.d/99-usb-switch.rules"
 install -o root -g root -m 644 "$SCRIPT_DIR/99-usb-switch.rules" /etc/udev/rules.d/99-usb-switch.rules
 
@@ -44,6 +47,11 @@ cat <<'EOF'
 
 Done. Unplug/replug the UGREEN KVM hub (or flip it to the other PC and back)
 to trigger a real switch event and confirm it works. Log: /tmp/usb_switch.log
+
+If the Samsung is showing but blank (mutter sees DP-5 but nothing displays -
+e.g. after pressing its power button or an AC power-cycle outside of a KVM
+switch), run `revive-samsung.sh` directly to fix it without touching the
+KVM.
 
 Note: the GNOME custom keybinding "Switch Windows" (Ctrl+Alt+Home ->
 ddcutil setvcp 60 0x13 --bus 1) is a manual fallback stored in GNOME's
