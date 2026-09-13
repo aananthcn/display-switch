@@ -72,29 +72,47 @@ physical power button.
   related on this system; use `gdctl` (GNOME's own Wayland-native display
   CLI, ships with GNOME Shell 47+).
 
-**Root cause (best understanding):** the active DP→HDMI converter and/or
-the Samsung's own HDMI input don't complete a fresh link/HPD negotiation on
-their own after the BenQ's internal MST hub reconfigures during the input
-switch. Windows apparently forces a fuller re-negotiation on its own switch
-path and recovers quickly; Linux/mutter does not, by default.
+**There are actually two distinct failure modes**, discovered by comparing
+`gdctl show` output live across repeated switch tests:
 
-**Fix:** forcibly drop and re-add the Samsung (`DP-5`) from mutter's logical
-monitor layout via `gdctl set`, on every `add` (switch-to-Linux) event. This
-makes mutter redo the output negotiation in software — confirmed to revive
-the Samsung exactly like the physical power button does, without touching
-it. Implemented in `monitor-switch.sh`.
+1. **`DP-5` stays registered with mutter, just shows nothing.** `gdctl show`
+   still lists it as connected with a current mode. Forcibly dropping and
+   re-adding it in mutter's logical monitor layout via `gdctl set` makes
+   mutter redo the output negotiation in software — confirmed repeatedly to
+   revive the picture, no physical button needed.
+2. **`DP-5` disappears from mutter's topology entirely.** `gdctl show` lists
+   only `DP-2`. `gdctl` cannot fix this — it can only rearrange monitors
+   mutter already knows about, and there is nothing for it to re-add. This
+   turned out to be the **more common** outcome of a real KVM switch in
+   testing, not the exception. A 2-minute passive poll confirmed `DP-5`
+   does not come back on its own — only pressing the Samsung's physical
+   power button has reliably brought it back into mutter's topology (after
+   which case 1's fix applies, since it comes back registered-but-blank).
+   **This case is still unsolved from software alone — see "Open problem"
+   below.**
+
+`monitor-switch.sh` implements the automatic fix for case 1: it polls for
+`DP-2` to reappear after the DDC switch (its own link briefly retrains when
+the OSD input changes), then separately polls for `DP-5` to be registered,
+and only then runs the drop/re-add. If `DP-5` never registers within the
+poll window, it logs that clearly instead of silently failing, so you know
+case 2 happened and a manual power-button press is needed that time.
 
 Caveats:
-- This runs on **every** switch to Linux, not just when the bug actually
-  occurs (the script can't easily tell in advance) — so the Samsung will
-  now blank for about a second on every switch, even the ones that would
-  have been fine.
+- The gdctl revive runs on **every** switch to Linux where `DP-5` is
+  registered, not just when it's actually blank (the script can't tell in
+  advance) — so the Samsung will blank for about a second even on switches
+  that would have been fine on their own.
 - The `gdctl set` calls hardcode the current desktop layout (BenQ primary
   at `2560,0`, Samsung at `0,0`) and the connector names (`DP-2`, `DP-5`).
   If you ever rearrange the monitors in GNOME Settings, or a kernel/driver
   update renumbers the DRM connectors, update the `--x`/`--y` values and
   connector names in `monitor-switch.sh` to match — check with
   `gdctl show -v`.
+- A solo remaining logical monitor must sit at `(0,0)` — mutter rejects any
+  layout whose origin isn't `(0,0)` with "Logical monitors positions are
+  offset". (Caused a real bug during development: the disable step used
+  `--x 2560 --y 0` for solo `DP-2`, which always failed.)
 - `gdctl` needs a real D-Bus session to talk to mutter. Since udev runs this
   script as root with no desktop environment, the script explicitly runs
   `gdctl` via `runuser -u aananth` with `XDG_RUNTIME_DIR=/run/user/1000` and
@@ -102,6 +120,57 @@ Caveats:
   Confirmed these two vars are sufficient (tested with `env -i` plus just
   these two). If you change the Linux-side username/UID, update
   `GNOME_USER`/`GNOME_UID` at the top of `monitor-switch.sh`.
+
+### Open problem: automatically recovering case 2 (`DP-5` fully dropped)
+
+Unsolved. No script/CLI-level fix found; documenting the reasoning for
+future reference.
+
+**Why Windows doesn't have this problem (best understanding, can't inspect
+the actual driver code):** DisplayPort MST — the protocol behind the
+BenQ → converter → Samsung chain — lets a downstream branch device tell the
+GPU "something changed, re-check my status" via a lightweight *sideband*
+message on the shared AUX channel, without a full topology teardown. That's
+what should happen when the Samsung's HDMI side blips during the BenQ's
+input switch: a quick re-sync, not a disconnect. NVIDIA's Windows driver
+evidently handles that sideband message correctly and just re-links the
+branch. NVIDIA's **Linux** driver, at least in this combination (a plain
+active DP→HDMI adapter acting as an MST branch, not a purpose-built
+DisplayPort MST hub), appears to mishandle or drop that message — instead
+of re-linking, it tears the branch out of the topology entirely, matching
+exactly what's observed (`DP-5` vanishes rather than just going blank).
+This lines up with NVIDIA's Linux driver having generally weaker/buggier
+MST hotplug handling than its Windows counterpart — a known rough edge,
+since Linux desktop MST usage gets far less QA attention than Windows.
+
+**Why it can't be fixed from a script:** that decision is made inside the
+closed-source kernel driver's AUX-channel interrupt handling. There is no
+sysfs file, DRM property, `gdctl`/`xrandr` call, or other userspace hook
+that lets a script re-inject "here's the sideband message you missed" or
+otherwise force the driver to re-link an already-dropped MST branch.
+Confirmed a 2-minute wait doesn't let it self-heal either.
+
+**Options considered, none implemented yet:**
+1. **Check for a newer NVIDIA driver.** Currently on 595.91.07. NVIDIA does
+   periodically fix MST bugs; worth checking release notes / trying a
+   driver update before assuming this needs a workaround at all.
+2. **Smart plug to power-cycle the Samsung.** Cut and restore mains power
+   to the Samsung via a WiFi/Zigbee smart plug (prefer a local-API one like
+   Shelly/Tasmota over a cloud-only one) when `DP-5` doesn't register in
+   time. A real electrical power-cycle is very likely to force the same
+   fresh HPD the physical button does, since it re-initializes the
+   monitor's HDMI receiver hardware from scratch. Needs ~$10-20 of hardware
+   plus scripting its API into `monitor-switch.sh`. Most likely to actually
+   work end-to-end; not yet built.
+3. **Force a DRM connector reprobe via debugfs**
+   (`/sys/kernel/debug/dri/.../force`, root-only) to see if that makes the
+   NVIDIA driver rediscover the dropped branch without new hardware.
+   Untested — uncertain whether NVIDIA's proprietary driver honors `force`
+   for a dynamically-managed MST sub-connector the way it does for a real
+   physical port.
+4. **Accept it as semi-automatic.** Current state: the script auto-fixes
+   case 1, clearly logs case 2 when it happens, and a manual power-button
+   press remains the only known fix for case 2.
 
 ### Blank-screen regression after migrating 22.04 → 26.04
 
