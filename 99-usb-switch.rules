@@ -1,0 +1,13 @@
+# UGREEN USB-A KVM switch (Genesys Logic 05e3:0626) hotplug -> BenQ DDC/CI input switch
+#
+# ENV{DEVTYPE}=="usb_device" is required: ENV{PRODUCT} also matches this device's
+# usb_interface child node (e.g. 6-1:1.0), which made the script fire twice per
+# physical event and race two ddcutil commands on the same I2C bus.
+# Note: bare "DEVTYPE==" (without ENV{}) is not a valid match key on
+# systemd/udev 259 (Ubuntu 26.04) - it must be ENV{DEVTYPE}==.
+
+# KVM switched AWAY from Linux (hub disappears) -> send BenQ back to Windows (USB-C)
+ACTION=="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{PRODUCT}=="5e3/626/*", RUN+="/usr/local/bin/monitor-switch.sh remove"
+
+# KVM switched TO Linux (hub appears) -> send BenQ to DisplayPort
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{PRODUCT}=="5e3/626/*", RUN+="/usr/local/bin/monitor-switch.sh add"
