@@ -14,6 +14,28 @@ ACTION="$1"
 LOG=/tmp/usb_switch.log
 BUS=1
 
+# 2026-09-15 incident: an nvidia_modeset kernel NULL-pointer BUG
+# (DisplayPort::ConnectorImpl::ensureMstNodesPoweredUp) wedged the KMS
+# thread mid-DDC-switch, which in turn wedges ddcutil's I2C-over-DP-AUX
+# channel and gdctl's DBus calls to mutter indefinitely. Without a timeout,
+# each hung invocation sat until udev's own 180s RUN+= kill, and every KVM
+# hub bounce in the meantime spawned another one on top of it, eating
+# systemd-udevd's worker pool and stalling unrelated USB hotplug (e.g.
+# flashing a Qualcomm board) behind it. DDCUTIL_TIMEOUT/GDCTL_TIMEOUT below
+# fail fast instead, and the lock below stops the pileup. This doesn't fix
+# the underlying nvidia driver bug - see README - it just stops one wedged
+# switch from cascading into unrelated USB failures.
+DDCUTIL_TIMEOUT=15
+GDCTL_TIMEOUT=5
+REVIVE_TIMEOUT=20
+
+LOCK=/run/lock/monitor-switch.lock
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "$(date) monitor-switch.sh: another instance is still running (likely wedged on I2C/DBus) - skipping this event instead of piling up" >> "$LOG"
+  exit 0
+fi
+
 # No sleep here: the DDC/I2C link to the monitor is independent of the USB
 # peripheral tree the KVM hub sits on, so there is nothing to "settle" before
 # calling ddcutil. (The old 2s sleep was pure added latency - it did not
@@ -28,7 +50,8 @@ GNOME_USER=aananth
 GNOME_UID=1000
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 run_as_user() {
-  /usr/sbin/runuser -u "$GNOME_USER" -- env \
+  local t="$1"; shift
+  timeout "$t" /usr/sbin/runuser -u "$GNOME_USER" -- env \
     XDG_RUNTIME_DIR="/run/user/$GNOME_UID" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$GNOME_UID/bus" \
     "$@"
@@ -50,7 +73,7 @@ run_as_user() {
 wait_for_monitor() {
   local name="$1" tries="$2"
   for _ in $(seq 1 "$tries"); do
-    run_as_user /usr/bin/gdctl show 2>/dev/null | grep -q "Monitor $name" && return 0
+    run_as_user "$GDCTL_TIMEOUT" /usr/bin/gdctl show 2>/dev/null | grep -q "Monitor $name" && return 0
     sleep 0.5
   done
   return 1
@@ -66,9 +89,28 @@ case "$ACTION" in
 esac
 
 echo "$(date) UGREEN $ACTION detected, switching BenQ (bus $BUS) to $INPUT" >> "$LOG"
-/usr/bin/ddcutil setvcp 60 "$INPUT" --bus "$BUS" >> "$LOG" 2>&1
+timeout "$DDCUTIL_TIMEOUT" /usr/bin/ddcutil setvcp 60 "$INPUT" --bus "$BUS" >> "$LOG" 2>&1
+DDCUTIL_RC=$?
+if [ "$DDCUTIL_RC" -eq 124 ]; then
+  echo "$(date) ddcutil timed out after ${DDCUTIL_TIMEOUT}s (I2C/DP-AUX channel likely wedged) - giving up on this event, not polling gdctl (it's likely wedged too)" >> "$LOG"
+  exit 1
+fi
 
 if [ "$ACTION" = "add" ]; then
+  # 2026-09-15 experiment: unlike switching input via the BenQ's own OSD
+  # buttons, a DDC/CI-triggered VCP 0x60 write is consistently followed by
+  # a period where the GPU can't get KMS modes ("Failed to create KMS
+  # output: No modes available" - see README) until the DP link retrains
+  # and mutter rediscovers it. Hypothesis: the monitor's firmware treats a
+  # DDC/CI input switch differently from a button-press input switch, and
+  # is waiting for an explicit "power on" (VCP D6=0x01) the button path
+  # sends implicitly. Testing whether nudging it ourselves shortens/avoids
+  # that gap. If this doesn't measurably help, remove it - it's an added
+  # DDC/CI write into the same AUX channel that's already prone to
+  # wedging (see DDCUTIL_TIMEOUT note above), so it isn't free.
+  sleep 1
+  timeout "$DDCUTIL_TIMEOUT" /usr/bin/ddcutil setvcp d6 0x01 --bus "$BUS" >> "$LOG" 2>&1
+
   # The Samsung (DP-5, MST off the BenQ's DP-out through an active DP->HDMI
   # converter) frequently stays powered off after this switch. The actual
   # gdctl disable/re-add dance lives in revive-samsung.sh, shared with
@@ -76,7 +118,7 @@ if [ "$ACTION" = "add" ]; then
   if wait_for_monitor DP-2 10; then
     if wait_for_monitor DP-5 20; then
       echo "$(date) DP-5 registered with mutter, reviving via revive-samsung.sh" >> "$LOG"
-      run_as_user "$SCRIPT_DIR/revive-samsung.sh" >> "$LOG" 2>&1
+      run_as_user "$REVIVE_TIMEOUT" "$SCRIPT_DIR/revive-samsung.sh" >> "$LOG" 2>&1
     else
       echo "$(date) DP-5 never registered with mutter (MST branch fully dropped) - Samsung will likely need a manual power-button press this time" >> "$LOG"
     fi

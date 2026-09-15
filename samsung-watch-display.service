@@ -2,7 +2,7 @@
 Description=Auto-revive Samsung (DP-5) via gdctl when it reappears in mutter
 
 [Service]
-ExecStart=/usr/local/bin/watch-samsung.sh
+ExecStart=/usr/local/bin/samsung-watch.sh
 Restart=always
 RestartSec=5
 
