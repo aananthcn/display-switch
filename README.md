@@ -70,3 +70,7 @@ The previous fully-automated udev-based approach, kept for reference/history
 - see `obsolete/README.md` for the original topology writeup and full
 incident history (I2C bus renumbering, double-firing udev rules, the
 NVIDIA KMS-wedge bug, etc).
+
+# Windows Shortcut
+Created a link file in Desktop and mapped it to Ctrl+Alt+Home with following as command:
+C:\_D\Tools\my-tools\ControlMyMonitor.exe /SetValue Primary 60 16
