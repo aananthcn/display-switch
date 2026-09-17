@@ -28,20 +28,23 @@ buttons, without leaving the keyboard.
 - `benq-sw-2-usb.sh` - switch BenQ to USB-C (Windows PC)
 - `benq-sw-2-hdmi.sh` - switch BenQ to HDMI-1
 
-All three just run `ddcutil setvcp 60 <value> --bus 1` (bus 1 and the VCP
-values are specific to this BenQ GW2790QT unit - re-verify with `ddcutil
-detect` / `ddcutil capabilities --bus 1` after any kernel/NVIDIA driver
-upgrade, since DDC-over-I2C bus numbers are assigned by DRM connector
-enumeration order and are not guaranteed stable). No sudo needed - run as
-the normal desktop user (in the `i2c` group).
+All three run `ddcutil setvcp 60 <value> --bus "$(detect-benq-bus.sh)"` (the
+VCP values are specific to this BenQ GW2790QT unit - re-verify with `ddcutil
+capabilities --bus <N>` after any kernel/NVIDIA driver upgrade). The bus
+number is resolved fresh on every run via `detect-benq-bus.sh`, since
+DDC-over-I2C bus numbers are assigned by DRM connector enumeration order and
+are not stable - they've shifted across kernel/driver upgrades and even
+across which monitors are connected at boot. No sudo needed - run as the
+normal desktop user (in the `i2c` group).
 
 Installed to `/usr/local/bin` (same pattern as `samsung-revive.sh`/
 `samsung-watch.sh`) so GNOME shortcuts have a stable path independent of
-where this repo checkout lives:
+where this repo checkout lives. `detect-benq-bus.sh` must be installed
+alongside the switch scripts since they call it by path:
 
 ```
-sudo cp benq-sw-2-dp.sh benq-sw-2-usb.sh benq-sw-2-hdmi.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/benq-sw-2-dp.sh /usr/local/bin/benq-sw-2-usb.sh /usr/local/bin/benq-sw-2-hdmi.sh
+sudo cp benq-sw-2-dp.sh benq-sw-2-usb.sh benq-sw-2-hdmi.sh detect-benq-bus.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/benq-sw-2-dp.sh /usr/local/bin/benq-sw-2-usb.sh /usr/local/bin/benq-sw-2-hdmi.sh /usr/local/bin/detect-benq-bus.sh
 ```
 
 ## GNOME shortcuts
