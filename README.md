@@ -74,3 +74,10 @@ NVIDIA KMS-wedge bug, etc).
 # Windows Shortcut
 Created a link file in Desktop and mapped it to Ctrl+Alt+Home with following as command:
 C:\_D\Tools\my-tools\ControlMyMonitor.exe /SetValue Primary 60 16
+
+This would choose USB-C as input.
+
+Created another link file for Switch2Linux and mapped it to Ctrl+Home+End with following as command:
+C:\_D\Tools\my-tools\ControlMyMonitor.exe /SetValue Primary 60 15
+
+This would choose DisplayPort-1 as input (same VCP 60 value 0xF used by benq-sw-2-dp.sh on the Linux side).
