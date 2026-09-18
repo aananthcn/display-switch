@@ -25,6 +25,34 @@ is_dp5_present() {
   /usr/bin/gdctl show 2>/dev/null | grep -q "Monitor DP-5"
 }
 
+# The still-unsolved NVIDIA KMS/MST wedge (obsolete/README.md "Open problem"
+# section) doesn't always go through a clean absent->present DP-5 transition
+# - sometimes it just stalls the whole KMS atomic-commit pipeline instead
+# (gnome-shell spams "Page flip failed"/"Failed to post KMS update" every
+# frame, no MonitorsChanged signal, no kernel/nvidia log lines at all). That
+# leaves no record anywhere unless you happen to go digging in journalctl
+# afterwards. Tag it into this log too so it's visible next to the DP-5
+# revive history. Debounced to one note per 30s so the frame-rate spam
+# doesn't flood the log; this only logs a note, it doesn't attempt a fix -
+# manual OSD/cable changes and gdctl are confirmed not to help once this
+# state is hit, only a reboot (or the Samsung's own >=90s power-cycle, if
+# that's what triggers the underlying MST retrain) has recovered it so far.
+watch_kms_wedge() {
+  local last=0 now
+  journalctl -f -o cat -t gnome-shell 2>/dev/null | while IFS= read -r line; do
+    case "$line" in
+      *"Failed to post KMS update"*)
+        now=$(date +%s)
+        if (( now - last >= 30 )); then
+          echo "$(date) KMS/MST wedge detected (drmModeAtomicCommit spam from gnome-shell) - manual input-switch/cable changes won't fix this, see obsolete/README.md 'Open problem' section; try a reboot" >> "$LOG"
+          last=$now
+        fi
+        ;;
+    esac
+  done
+}
+watch_kms_wedge &
+
 was_present=false
 is_dp5_present && was_present=true
 
