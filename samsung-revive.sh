@@ -18,29 +18,44 @@ set -euo pipefail
 # hanging when run standalone or from samsung-watch.sh.
 GDCTL_TIMEOUT=5
 
-wait_for_monitor() {
-  local name="$1" tries="$2"
+# Connector names (DP-2/DP-4/DP-5...) are assigned by the driver and change
+# across boots and kernel/driver updates, so never hardcode them. Resolve by
+# identity from gdctl's top-level "Monitors:" section instead: the Samsung is
+# vendor SAM, the BenQ is whatever other monitor is listed.
+# Prints "<connector> <vendor>" per monitor.
+list_monitors() {
+  timeout "$GDCTL_TIMEOUT" /usr/bin/gdctl show 2>/dev/null | awk '
+    /^Logical monitors:/ { exit }
+    match($0, /Monitor [^ ]+ \(/) { name = substr($0, RSTART + 8, RLENGTH - 10) }
+    /Vendor:/ { print name, $NF }'
+}
+
+# Sets SAMSUNG and BENQ; retries while the Samsung hasn't registered yet.
+find_monitors() {
+  local tries="$1" out
   for _ in $(seq 1 "$tries"); do
-    timeout "$GDCTL_TIMEOUT" /usr/bin/gdctl show 2>/dev/null | grep -q "Monitor $name" && return 0
+    out=$(list_monitors)
+    SAMSUNG=$(awk '$2 == "SAM" { print $1; exit }' <<<"$out")
+    BENQ=$(awk '$2 != "SAM" { print $1; exit }' <<<"$out")
+    [ -n "$SAMSUNG" ] && [ -n "$BENQ" ] && return 0
     sleep 0.5
   done
   return 1
 }
 
-if ! wait_for_monitor DP-5 4; then
-  echo "DP-5 is not registered with mutter - gdctl can't fix this on its own." >&2
+if ! find_monitors 4; then
+  echo "Samsung and/or BenQ not registered with mutter (saw: ${SAMSUNG:-no Samsung}, ${BENQ:-no BenQ}) - gdctl can't fix this on its own." >&2
   echo "Press the Samsung's power button, or power-cycle it (off >=90s), first." >&2
   exit 1
 fi
 
-echo "Reviving Samsung (DP-5) via gdctl..."
-# Solo DP-2 must sit at (0,0) - mutter rejects a logical-monitor layout
+echo "Reviving Samsung ($SAMSUNG, BenQ $BENQ) via gdctl..."
+# Solo BenQ must sit at (0,0) - mutter rejects a logical-monitor layout
 # whose origin isn't (0,0) ("Logical monitors positions are offset").
-# Positions below match the current GNOME layout (DP-2 primary at 2560,0
-# next to DP-5 at 0,0) - update these if the desktop layout is ever
-# rearranged (check with `gdctl show -v`).
-timeout "$GDCTL_TIMEOUT" /usr/bin/gdctl set --logical-monitor --monitor DP-2 --primary --x 0 --y 0
+# Positions below match the current GNOME layout (BenQ primary at 2560,0
+# next to the Samsung at 0,0) - update if the desktop layout is rearranged.
+timeout "$GDCTL_TIMEOUT" /usr/bin/gdctl set --logical-monitor --monitor "$BENQ" --primary --x 0 --y 0
 sleep 1
-timeout "$GDCTL_TIMEOUT" /usr/bin/gdctl set --logical-monitor --monitor DP-2 --primary --x 2560 --y 0 \
-                    --logical-monitor --monitor DP-5 --x 0 --y 0
+timeout "$GDCTL_TIMEOUT" /usr/bin/gdctl set --logical-monitor --monitor "$BENQ" --primary --x 2560 --y 0 \
+                    --logical-monitor --monitor "$SAMSUNG" --x 0 --y 0
 echo "Done."

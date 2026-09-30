@@ -22,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG=/tmp/watch_samsung.log
 
 is_dp5_present() {
-  /usr/bin/gdctl show 2>/dev/null | grep -q "Monitor DP-5"
+  /usr/bin/gdctl show 2>/dev/null | grep -q "Vendor: SAM"
 }
 
 # The still-unsolved NVIDIA KMS/MST wedge (obsolete/README.md "Open problem"
