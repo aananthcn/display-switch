@@ -1,0 +1,12 @@
+[Unit]
+Description=Load nouveau for the GT 710 (blacklisted by the NVIDIA package)
+After=systemd-modules-load.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'modprobe -a drm_display_helper drm_gpuvm drm_exec gpu-sched ttm drm_ttm_helper mxm-wmi i2c-algo-bit wmi video && insmod /lib/modules/$(uname -r)/kernel/drivers/gpu/drm/nouveau/nouveau.ko.zst'
+
+[Install]
+WantedBy=multi-user.target

@@ -3,10 +3,10 @@
 #
 # DDC-over-I2C bus numbers are assigned by DRM connector enumeration order,
 # which is not guaranteed stable - it has shifted across kernel/driver
-# upgrades and even across which monitors are connected at boot (e.g. bus 1
-# with only the BenQ connected vs bus 2 once the Samsung MST chain is also
-# up). Hardcoding --bus N in the switch scripts broke silently each time;
-# this resolves it fresh on every invocation instead.
+# upgrades and even across which monitors are connected at boot (e.g. the
+# bus shifts once the second monitor is plugged into the GT 710). Hardcoding
+# --bus N in the switch scripts broke silently each time; this resolves it
+# fresh on every invocation instead.
 set -euo pipefail
 
 bus="$(ddcutil detect --brief 2>/dev/null | awk '

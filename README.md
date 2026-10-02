@@ -1,78 +1,63 @@
 # display-switch
 
 BenQ GW2790QT input switching on host `parasivam`, driven manually via
-keyboard shortcuts instead of automatically off KVM USB events.
+keyboard shortcuts.
 
-## Why manual
+## Current topology (GT 710 for graphics, RTX 5070 for AI only)
 
-The previous setup (`obsolete/99-usb-switch.rules` + `obsolete/monitor-switch.sh`)
+The Gigabyte GT 710 (nouveau) drives both monitors directly: BenQ on HDMI,
+Samsung on DVI-D (via a DVI-to-HDMI cable). No DisplayPort, no MST. The
+RTX 5070 has no displays attached and is used only for AI work.
+
+nouveau is blacklisted by the NVIDIA package (`blacklist nouveau`, `alias
+nouveau off`), so `nouveau-gt710.service` loads it at boot: it modprobes the
+dependencies, then `insmod`s the .ko directly (plain `insmod` alone fails
+with "Unknown symbol drm_dp_..." because it skips dependencies).
+
+**Verified:** after a reboot, `nouveau-gt710.service` loads nouveau at boot and
+both monitors come up on the GT 710.
+
+Limits of the GT 710: DVI-D is single-link (max 1920x1200@60), HDMI 1.4
+(max 4K@30). If the Samsung is a 1440p panel it will run at 1080p/1200p.
+
+## History: why manual switching
+
+The earlier setup (`obsolete/99-usb-switch.rules` + `obsolete/monitor-switch.sh`)
 switched the BenQ's DDC/CI input automatically on udev USB add/remove events
-from the UGREEN KVM hub. Every DDC/CI-triggered input switch (`setvcp 60`)
-makes the BenQ's scaler reinitialize and retrain its DisplayPort link, which
-briefly drops video on both the BenQ and the Samsung (MST-chained off the
-BenQ's DP-out) - `gnome-shell: Failed to create KMS output: No modes
-available` until the link retrains and mutter rediscovers it. Switching via
-the monitor's own OSD buttons doesn't cause this. A DDC "power on" (VCP
-0xD6=0x01) nudge after the switch was tried and didn't fix it (see git
-history / `obsolete/monitor-switch.sh`'s comments for the full investigation,
-including a separate NVIDIA driver KMS-wedge bug found along the way).
-
-Given the retrain appears to be inherent to a DDC/CI-triggered input switch
-on this monitor, the fix is to switch input manually via GNOME keyboard
-shortcuts instead of tapping USB hotplug events - same trade-off as OSD
-buttons, without leaving the keyboard.
+from the UGREEN KVM hub. With the RTX 5070 on DisplayPort and the Samsung
+MST-chained off the BenQ, every DDC/CI input switch forced a DP link retrain
+that dropped both monitors. Switching manually via keyboard shortcuts was the
+workaround. The MST chain and its Samsung auto-revive scripts
+(`obsolete/samsung-*`) are no longer used.
 
 ## Scripts
 
-- `benq-sw-2-dp.sh` - switch BenQ to DisplayPort-1 (Linux PC)
-- `benq-sw-2-usb.sh` - switch BenQ to USB-C (Windows PC)
-- `benq-sw-2-hdmi.sh` - switch BenQ to HDMI-1
+- `benq-sw-2-hdmi.sh` - switch BenQ to HDMI-1 (Linux PC, VCP 60 = 0x11)
+- `benq-sw-2-usb.sh` - switch BenQ to USB-C (Windows PC, VCP 60 = 0x13)
+- `detect-benq-bus.sh` - finds the BenQ's I2C bus by name (bus numbers shift)
+- `nouveau-gt710.service` - loads nouveau at boot
+- `install.sh` - installs all of the above (`sudo ./install.sh`), enables
+  `i2c-dev`, and removes the old DP/Samsung leftovers
 
-All three run `ddcutil setvcp 60 <value> --bus "$(detect-benq-bus.sh)"` (the
-VCP values are specific to this BenQ GW2790QT unit - re-verify with `ddcutil
-capabilities --bus <N>` after any kernel/NVIDIA driver upgrade). The bus
-number is resolved fresh on every run via `detect-benq-bus.sh`, since
-DDC-over-I2C bus numbers are assigned by DRM connector enumeration order and
-are not stable - they've shifted across kernel/driver upgrades and even
-across which monitors are connected at boot. No sudo needed - run as the
-normal desktop user (in the `i2c` group).
-
-Installed to `/usr/local/bin` (same pattern as `samsung-revive.sh`/
-`samsung-watch.sh`) so GNOME shortcuts have a stable path independent of
-where this repo checkout lives. `detect-benq-bus.sh` must be installed
-alongside the switch scripts since they call it by path:
-
-```
-sudo cp benq-sw-2-dp.sh benq-sw-2-usb.sh benq-sw-2-hdmi.sh detect-benq-bus.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/benq-sw-2-dp.sh /usr/local/bin/benq-sw-2-usb.sh /usr/local/bin/benq-sw-2-hdmi.sh /usr/local/bin/detect-benq-bus.sh
-```
+VCP values are specific to this BenQ unit - re-verify with `ddcutil
+capabilities --bus <N>` after a kernel/driver upgrade. No sudo needed at run
+time; the user must be in the `i2c` group.
 
 ## GNOME shortcuts
 
-Configured manually in Settings -> Keyboard -> Custom Shortcuts (not stored
-in this repo - back up with `dconf dump /org/gnome/settings-daemon/` if you
-want this to survive a reformat):
+Configured manually in Settings -> Keyboard -> Custom Shortcuts (back up with
+`dconf dump /org/gnome/settings-daemon/`):
 
-- `Ctrl+Alt+Home` -> `/usr/local/bin/benq-sw-2-dp.sh`
+- `Ctrl+Alt+Home` -> `/usr/local/bin/benq-sw-2-hdmi.sh`
 - `Ctrl+Alt+End` -> `/usr/local/bin/benq-sw-2-usb.sh`
 
-## Samsung (DP-5) auto-revive - still active, unrelated to the above
-
-`samsung-revive.sh` and `samsung-watch.sh` (installed as `samsung-watch-display.service`,
-a systemd --user unit) handle a separate problem: the Samsung, MST-chained
-off the BenQ's DP-out, frequently needs its logical-monitor position
-re-poked via `gdctl` to actually show video after it reappears (e.g. after
-its own power button is pressed, or an AC power-cycle of >=90s). This is
-independent of how the BenQ's input is switched and is left running as-is.
-Check status with `systemctl --user status samsung-watch-display.service`, log at
-`/tmp/watch_samsung.log`.
+If the old `samsung-watch-display.service` is still enabled, run
+`systemctl --user disable --now samsung-watch-display.service`.
 
 ## obsolete/
 
-The previous fully-automated udev-based approach, kept for reference/history
-- see `obsolete/README.md` for the original topology writeup and full
-incident history (I2C bus renumbering, double-firing udev rules, the
-NVIDIA KMS-wedge bug, etc).
+The previous RTX-5070 / DisplayPort / MST setup, kept for history. See
+`obsolete/README.md` for the original topology writeup and incident history.
 
 # Windows Shortcut
 Created a link file in Desktop and mapped it to Ctrl+Alt+Home with following as command:
@@ -81,6 +66,6 @@ C:\_D\Tools\my-tools\ControlMyMonitor.exe /SetValue Primary 60 16
 This would choose USB-C as input.
 
 Created another link file for Switch2Linux and mapped it to Ctrl+Home+End with following as command:
-C:\_D\Tools\my-tools\ControlMyMonitor.exe /SetValue Primary 60 15
+C:\_D\Tools\my-tools\ControlMyMonitor.exe /SetValue Primary 60 17
 
-This would choose DisplayPort-1 as input (same VCP 60 value 0xF used by benq-sw-2-dp.sh on the Linux side).
+This would choose HDMI-1 as input (VCP 60 value 0x11 = 17, same as benq-sw-2-hdmi.sh on the Linux side). It was 15 (DisplayPort) in the old configuration - update the Windows shortcut.
